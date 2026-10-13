@@ -1,0 +1,432 @@
+/* ==========================================================================
+   services/neisService.js
+   - 나이스(NEIS) 교육정보 개방포털 Open API 연동을 전담하는 서비스 모듈
+   - 학사일정(SchoolSchedule)과 급식식단정보(mealServiceDietInfo)를 호출하며,
+     API 인증키는 로컬 재정의 값을 우선하고 없으면 state.js의 기본키로 폴백한다
+   - 급식 데이터는 월별로 localStorage에 캐싱되어 재조회 시 API 호출(비용) 없이
+     즉시 응답하도록 최적화되어 있다
+   ========================================================================== */
+
+import { state, NEIS_API_KEY, NEIS_DEFAULT_SCHOOL, NEIS_DEFAULT_OFFICE } from '../core/state.js';
+import { sortEventsByDate } from '../utils/helpers.js';
+import { saveLocalEvents, getCachedMeals, setCachedMeals, clearMealCache } from './storageService.js';
+import { isFirebaseConnected, runFirestoreBatch } from './firebaseService.js';
+
+// ------------------------------------------------------------------
+// 나이스 API 설정 로컬 재정의(override) localStorage 키
+// ------------------------------------------------------------------
+const NEIS_API_KEY_STORAGE_KEY = 'workshop_schedule_neis_api_key';
+const NEIS_SCHOOL_CODE_STORAGE_KEY = 'workshop_schedule_neis_school_code';
+const NEIS_OFFICE_CODE_STORAGE_KEY = 'workshop_schedule_neis_office_code';
+
+// ------------------------------------------------------------------
+// 나이스 Open API 엔드포인트
+// ------------------------------------------------------------------
+const NEIS_SCHEDULE_ENDPOINT = 'https://open.neis.go.kr/hub/SchoolSchedule';
+const NEIS_MEAL_ENDPOINT = 'https://open.neis.go.kr/hub/mealServiceDietInfo';
+
+// ------------------------------------------------------------------
+// 1. API 설정 getter/setter (로컬 재정의 우선, 기본값 폴백)
+// ------------------------------------------------------------------
+
+/**
+ * 현재 사용할 나이스 Open API 인증키를 반환한다.
+ * 관리자가 설정에서 별도로 지정한 로컬 재정의 키가 있으면 그 값을 우선 사용하고,
+ * 없으면 state.js에 정의된 기본 인증키(NEIS_API_KEY)로 폴백한다.
+ * @returns {string} 사용할 나이스 API 인증키
+ */
+export function getNeisApiKey() {
+    try {
+        const overridden = localStorage.getItem(NEIS_API_KEY_STORAGE_KEY);
+        if (overridden && overridden.trim()) return overridden.trim();
+    } catch (e) {
+        console.warn('나이스 API 인증키 조회 실패:', e);
+    }
+    return NEIS_API_KEY;
+}
+
+/**
+ * 나이스 Open API 인증키를 로컬에 재정의(override)한다.
+ * 빈 값을 전달하면 재정의를 제거하고 기본 인증키로 되돌린다.
+ * @param {string} apiKey - 새로 지정할 인증키. 비어 있으면 재정의 해제.
+ */
+export function setNeisApiKey(apiKey) {
+    try {
+        const value = (apiKey || '').trim();
+        if (value) {
+            localStorage.setItem(NEIS_API_KEY_STORAGE_KEY, value);
+        } else {
+            localStorage.removeItem(NEIS_API_KEY_STORAGE_KEY);
+        }
+        clearMealCache();
+    } catch (e) {
+        console.warn('나이스 API 인증키 저장 실패:', e);
+    }
+}
+
+/**
+ * 현재 사용할 나이스 행정표준기관코드(학교코드)를 반환한다.
+ * 설정에서 변경한 값이 있으면 우선 사용하고, 없으면 기본 학교코드로 폴백한다.
+ * @returns {string} 사용할 학교코드
+ */
+export function getNeisSchoolCode() {
+    try {
+        const overridden = localStorage.getItem(NEIS_SCHOOL_CODE_STORAGE_KEY);
+        if (overridden && overridden.trim()) return overridden.trim();
+    } catch (e) {
+        console.warn('나이스 학교코드 조회 실패:', e);
+    }
+    return NEIS_DEFAULT_SCHOOL;
+}
+
+/**
+ * 나이스 학교코드를 로컬에 저장한다.
+ * @param {string} schoolCode - 학교 행정표준기관코드
+ */
+export function setNeisSchoolCode(schoolCode) {
+    try {
+        const value = (schoolCode || '').trim();
+        if (value) {
+            localStorage.setItem(NEIS_SCHOOL_CODE_STORAGE_KEY, value);
+        } else {
+            localStorage.removeItem(NEIS_SCHOOL_CODE_STORAGE_KEY);
+        }
+        clearMealCache();
+    } catch (e) {
+        console.warn('나이스 학교코드 저장 실패:', e);
+    }
+}
+
+/**
+ * 현재 사용할 시도교육청 코드를 반환한다.
+ * @returns {string} 사용할 시도교육청코드
+ */
+export function getNeisOfficeCode() {
+    try {
+        const overridden = localStorage.getItem(NEIS_OFFICE_CODE_STORAGE_KEY);
+        if (overridden && overridden.trim()) return overridden.trim();
+    } catch (e) {
+        console.warn('나이스 교육청코드 조회 실패:', e);
+    }
+    return NEIS_DEFAULT_OFFICE;
+}
+
+/**
+ * 시도교육청코드를 로컬에 저장한다.
+ * @param {string} officeCode - 시도교육청코드
+ */
+export function setNeisOfficeCode(officeCode) {
+    try {
+        const value = (officeCode || '').trim();
+        if (value) {
+            localStorage.setItem(NEIS_OFFICE_CODE_STORAGE_KEY, value);
+        } else {
+            localStorage.removeItem(NEIS_OFFICE_CODE_STORAGE_KEY);
+        }
+        clearMealCache();
+    } catch (e) {
+        console.warn('나이스 교육청코드 저장 실패:', e);
+    }
+}
+
+// ------------------------------------------------------------------
+// 2. 내부 헬퍼
+// ------------------------------------------------------------------
+
+/**
+ * 'YYYYMMDD' 형식의 나이스 원본 날짜 문자열을 'YYYY-MM-DD'로 변환한다.
+ * @param {string} rawYmd - 'YYYYMMDD' 형식의 원본 날짜 문자열
+ * @returns {string} 'YYYY-MM-DD' 형식의 날짜 문자열
+ */
+function formatNeisDate(rawYmd) {
+    return `${rawYmd.substring(0, 4)}-${rawYmd.substring(4, 6)}-${rawYmd.substring(6, 8)}`;
+}
+
+/**
+ * 우리 학교 2026학년도 공식 학사일정 모의(mock) 데이터를 생성한다.
+ * 나이스 API 호출이 실패했을 때(네트워크 단절, 서버 장애 등) 사용자 경험이
+ * 끊기지 않도록 하는 안전한 폴백 데이터로 사용된다.
+ * @param {string|number} year - 학사일정 기준 연도 (예: 2026)
+ * @returns {Array<{title: string, date: string, category: string, desc: string}>} 모의 학사일정 배열
+ */
+function buildMockScheduleEvents(year) {
+    return [
+        { title: '2026학년도 입학식 및 개학식', date: `${year}-03-02`, category: 'neis', desc: '1학년 신입생 입학식 및 2, 3학년 시업식' },
+        { title: '1학기 학교 총회 및 공개수업', date: `${year}-03-18`, category: 'neis', desc: '각 교실별 학부모 참관 수업 및 시청각실 교육 설명회' },
+        { title: '과학 탐구의 달 행사', date: `${year}-04-21`, category: 'neis', desc: '물로켓, 가상 코딩 드론 탐구 활동 전개' },
+        { title: '춘계 교내 스포츠한마당', date: `${year}-05-01`, category: 'neis', desc: '학년별 피구, 풋살, 계주 활동 진행' },
+        { title: '1학기 중간 1차 지필평가', date: `${year}-05-12`, category: 'neis', desc: '2, 3학년 대상 교과 평가' },
+        { title: '현장 체험 학습 주간', date: `${year}-05-22`, category: 'neis', desc: '진로 체험 학습 및 야외 탐방' },
+        { title: '여름방학식', date: `${year}-07-24`, category: 'neis', desc: '여름방학 개식 및 하교' },
+        { title: '2학기 개학식', date: `${year}-08-24`, category: 'neis', desc: '2학기 등교 및 시업' },
+        { title: '우리 학교 종합 축제 한마당', date: `${year}-10-23`, category: 'neis', desc: '교실 전시회 및 강당 예술제 동아리 장기자랑' },
+        { title: '겨울방학식', date: `${year}-12-24`, category: 'neis', desc: '겨울방학 시작일' },
+        { title: '학년 수료 및 졸업식', date: `${Number(year) + 1}-02-12`, category: 'neis', desc: '졸업장 수여식' }
+    ];
+}
+
+/**
+ * 새로 가져온 나이스 공식 일정 목록을 state.events에 교체 반영한다.
+ * - 교직원이 수동으로 등록한 내부 일정(category !== 'neis')은 100% 안전하게 유지한다.
+ * - 해당 학년도 범위(3월 1일 ~ 이듬해 2월 말일)의 기존 나이스 공식 일정(category === 'neis')만 선별하여 제거하고,
+ *   새로 가져온 최신 나이스 일정들로 온전히 교체하여 날짜 변경/명칭 수정/취소/중복 잔여 문제를 방지한다.
+ * - 파이어베이스 연동 중인 경우 Firestore DB에도 이전 나이스 일정 삭제 및 새 나이스 일정 등록을 일괄 배치(batch) 반영한다.
+ * @param {Array<{id: string, title: string, date: string, category: string, desc: string}>} newEvents - 최신 나이스 일정 배열
+ * @param {string|number} year - 학사일정 기준 연도
+ * @returns {Promise<number>} 실제로 반영된 최신 나이스 일정 건수
+ */
+async function replaceNeisEvents(newEvents, year) {
+    const startDate = `${year}-03-01`;
+    const endDate = `${Number(year) + 1}-02-29`;
+
+    // 해당 학년도 범위의 기존 나이스 일정 판별
+    const isTargetYearNeis = (e) => e.category === 'neis' && e.date >= startDate && e.date <= endDate;
+
+    // 1. 파이어베이스 연동 중이면 Firestore DB 일괄 배치(batch) 반영
+    if (isFirebaseConnected()) {
+        try {
+            await runFirestoreBatch((batch, db) => {
+                state.events
+                    .filter(isTargetYearNeis)
+                    .forEach((ev) => batch.delete(db.collection('schedules').doc(ev.id)));
+
+                newEvents.forEach((ev) => {
+                    const docRef = db.collection('schedules').doc(ev.id);
+                    batch.set(docRef, {
+                        title: ev.title,
+                        date: ev.date,
+                        category: 'neis',
+                        desc: ev.desc || ''
+                    });
+                });
+            });
+        } catch (fbErr) {
+            console.warn('[neisService] Firestore 나이스 일정 동기화 실패 (로컬 저장은 유지됨):', fbErr);
+        }
+    }
+
+    // 2. 로컬 상태(state.events) 교체: 기존 해당 연도 나이스 일정만 제외하고 내부 일정은 보존
+    const preservedEvents = state.events.filter((e) => !isTargetYearNeis(e));
+    state.events = sortEventsByDate([...preservedEvents, ...newEvents]);
+    saveLocalEvents(state.events);
+
+    return newEvents.length;
+}
+
+// ------------------------------------------------------------------
+// 3. 학사일정(SchoolSchedule) 동기화
+// ------------------------------------------------------------------
+
+/**
+ * 나이스 학사일정 Open API(SchoolSchedule)를 호출해 연간 공식 학사일정을 동기화한다.
+ * 관리자 권한이 없거나 학교코드가 비어 있으면 실행되지 않으며,
+ * API 호출이 실패하면 자동으로 simulateNeisSync()의 모의 데이터로 폴백한다.
+ * @param {object} [options] - 동기화 옵션
+ * @param {string} [options.officeCode] - 시도교육청 코드
+ * @param {string} [options.schoolCode] - 행정표준기관코드 8자리
+ * @param {string|number} [options.year] - 학사일정 기준 연도 (기본값: 올해)
+ * @returns {Promise<{success: boolean, count: number, source: 'api'|'mock'|'none', message?: string}>} 동기화 결과
+ */
+export async function syncNeisSchedule({
+    officeCode = getNeisOfficeCode(),
+    schoolCode = getNeisSchoolCode(),
+    year = String(new Date().getFullYear())
+} = {}) {
+    if (!state.isAdmin) {
+        return { success: false, count: 0, source: 'none', message: '관리자 권한이 필요합니다.' };
+    }
+    if (!schoolCode) {
+        return { success: false, count: 0, source: 'none', message: '행정표준기관코드 8자리를 입력해 주세요.' };
+    }
+
+    setNeisOfficeCode(officeCode);
+    setNeisSchoolCode(schoolCode);
+
+    try {
+        const fromYmd = `${year}0301`;
+        const toYmd = `${Number(year) + 1}0228`;
+        const url = `${NEIS_SCHEDULE_ENDPOINT}?KEY=${getNeisApiKey()}&Type=json&pIndex=1&pSize=100&ATPT_OFCDC_SC_CODE=${officeCode}&SD_SCHUL_CODE=${schoolCode}&AA_FROM_YMD=${fromYmd}&AA_TO_YMD=${toYmd}`;
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('API 서버 통신에 실패했습니다.');
+
+        const result = await response.json();
+        if (result.RESULT && result.RESULT.CODE === 'INFO-200') {
+            throw new Error('검색된 학사일정 데이터가 없습니다.');
+        }
+        if (!(result.SchoolSchedule && result.SchoolSchedule[1] && result.SchoolSchedule[1].row)) {
+            throw new Error('예상치 못한 데이터 결과 형식입니다.');
+        }
+
+        const rows = result.SchoolSchedule[1].row;
+        const newEvents = rows.map((row, i) => ({
+            id: `ev-neis-${Date.now()}-${i}`,
+            title: row.EVENT_NM,
+            date: formatNeisDate(row.AA_YMD),
+            category: 'neis',
+            desc: row.EVENT_CN ? row.EVENT_CN.trim() : ''
+        }));
+
+        const importCount = await replaceNeisEvents(newEvents, year);
+        return { success: true, count: importCount, source: 'api' };
+    } catch (error) {
+        console.warn('나이스 학사일정 API 연동 실패로 모의 데이터를 주입합니다:', error);
+        return simulateNeisSync(year);
+    }
+}
+
+/**
+ * 나이스 API 연동이 불가능할 때 사용하는 안전한 모의(mock) 학사일정 데이터를 주입한다.
+ * @param {string|number} year - 학사일정 기준 연도
+ * @returns {Promise<{success: boolean, count: number, source: 'mock'}>} 동기화 결과
+ */
+export async function simulateNeisSync(year) {
+    const newEvents = buildMockScheduleEvents(year).map((se, i) => ({
+        id: `ev-sim-${Date.now()}-${i}`,
+        ...se
+    }));
+
+    const importCount = await replaceNeisEvents(newEvents, year);
+    return { success: true, count: importCount, source: 'mock' };
+}
+
+// ------------------------------------------------------------------
+// 4. 백그라운드 자동 동기화 (관리자 UI 조작 없이 앱 구동 시 1회 실행)
+// ------------------------------------------------------------------
+
+/**
+ * 앱 구동 시 나이스 공식 학사일정을 조용히(팝업 없이) 백그라운드에서 자동 동기화한다.
+ * 이미 해당 연도의 나이스 공식 일정이 있으면 비용 절감을 위해 API 호출을 생략한다.
+ * @param {string|number} [year] - 학사일정 기준 연도 (기본값: 올해)
+ * @returns {Promise<{success: boolean, count: number, source: 'skip'|'api'|'mock'}>} 동기화 결과
+ */
+export async function autoSyncNeisBackground(year = String(new Date().getFullYear())) {
+    const startDate = `${year}-03-01`;
+    const endDate = `${Number(year) + 1}-02-29`;
+    const hasNeisEvents = state.events.some((e) => e.category === 'neis' && e.date >= startDate && e.date <= endDate);
+    if (hasNeisEvents) {
+        console.log('[Auto Sync] 이미 나이스 공식 학사일정이 연동되어 있으므로 API 호출을 생략합니다.');
+        return { success: true, count: 0, source: 'skip' };
+    }
+
+    const officeCode = getNeisOfficeCode();
+    const schoolCode = getNeisSchoolCode();
+    const apiKey = getNeisApiKey();
+
+    if (!schoolCode || !apiKey) {
+        console.log('[Auto Sync] 나이스 API 키 또는 학교코드가 비어 있어 자동 동기화를 대기합니다.');
+        return { success: false, count: 0, source: 'none' };
+    }
+
+    try {
+        console.log('[Auto Sync] 나이스 학사일정 자동 동기화를 시작합니다...');
+        const fromYmd = `${year}0301`;
+        const toYmd = `${Number(year) + 1}0228`;
+        const url = `${NEIS_SCHEDULE_ENDPOINT}?KEY=${apiKey}&Type=json&pIndex=1&pSize=100&ATPT_OFCDC_SC_CODE=${officeCode}&SD_SCHUL_CODE=${schoolCode}&AA_FROM_YMD=${fromYmd}&AA_TO_YMD=${toYmd}`;
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('API network error');
+
+        const result = await response.json();
+        if (!(result.SchoolSchedule && result.SchoolSchedule[1] && result.SchoolSchedule[1].row)) {
+            return { success: true, count: 0, source: 'api' };
+        }
+
+        const rows = result.SchoolSchedule[1].row;
+        const newEvents = rows.map((row, i) => ({
+            id: `ev-neis-${Date.now()}-${i}`,
+            title: row.EVENT_NM,
+            date: formatNeisDate(row.AA_YMD),
+            category: 'neis',
+            desc: row.EVENT_CN ? row.EVENT_CN.trim() : ''
+        }));
+
+        const importCount = await replaceNeisEvents(newEvents, year);
+        console.log(`[Auto Sync] 나이스 학사일정 백그라운드 자동 갱신 완료 (${importCount}건 반영됨)`);
+        return { success: true, count: importCount, source: 'api' };
+    } catch (error) {
+        console.warn('[Auto Sync] API 조회 실패 (모의 데이터를 주입하지 않고 빈 상태를 유지합니다):', error);
+        return { success: false, count: 0, source: 'none' };
+    }
+}
+
+/**
+ * 나이스 API 백그라운드 자동 동기화가 실패했을 때 호출되는 조용한(팝업 없는) 모의 데이터 폴백.
+ * @param {string|number} year - 학사일정 기준 연도
+ * @returns {Promise<{success: boolean, count: number, source: 'mock'}>} 동기화 결과
+ */
+export async function autoSyncNeisMockSilent(year) {
+    const newEvents = buildMockScheduleEvents(year).map((se, i) => ({
+        id: `ev-sim-${Date.now()}-${i}`,
+        ...se
+    }));
+
+    const importCount = await replaceNeisEvents(newEvents, year);
+    console.log(`[Auto Sync] 모의 학사일정 백그라운드 자동 갱신 완료 (${importCount}건 반영됨)`);
+    return { success: true, count: importCount, source: 'mock' };
+}
+
+// ------------------------------------------------------------------
+// 5. 급식식단정보(mealServiceDietInfo) 조회 - 비용 0원 로컬 캐싱
+// ------------------------------------------------------------------
+
+/**
+ * 특정 월의 중식 급식 정보를 조회한다.
+ * `teacherschedule_meals_YYYY-MM` 키로 localStorage에 캐싱된 데이터가 있으면
+ * API 호출 없이 즉시 반환(비용 0원)하고, 없을 때만 나이스 급식 API를 호출해
+ * 결과를 캐싱한 뒤 반환한다.
+ * @param {number|string} year - 조회할 연도 (예: 2026)
+ * @param {number|string} month - 조회할 월 (1~12)
+ * @returns {Promise<Array<{date: string, menu: string, calories: string, origin: string, allergy: string}>>} 해당 월의 중식 급식 목록
+ */
+export async function fetchMonthMeals(year, month) {
+    const monthKey = `${year}-${String(month).padStart(2, '0')}`;
+
+    const cached = getCachedMeals(monthKey);
+    if (cached) return cached;
+
+    const paddedMonth = String(month).padStart(2, '0');
+    const fromYmd = `${year}${paddedMonth}01`;
+    const lastDay = new Date(year, month, 0).getDate();
+    const toYmd = `${year}${paddedMonth}${String(lastDay).padStart(2, '0')}`;
+
+    const officeCode = getNeisOfficeCode();
+    const schoolCode = getNeisSchoolCode();
+    const apiKey = getNeisApiKey();
+
+    if (!schoolCode || !apiKey) {
+        state.meals[monthKey] = [];
+        return [];
+    }
+
+    const url = `${NEIS_MEAL_ENDPOINT}?KEY=${apiKey}&Type=json&pIndex=1&pSize=100&ATPT_OFCDC_SC_CODE=${officeCode}&SD_SCHUL_CODE=${schoolCode}&MLSV_FROM_YMD=${fromYmd}&MLSV_TO_YMD=${toYmd}`;
+
+    try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('급식 API 응답 실패');
+
+        const result = await response.json();
+        const mealData = [];
+
+        if (result.mealServiceDietInfo && result.mealServiceDietInfo[1] && result.mealServiceDietInfo[1].row) {
+            result.mealServiceDietInfo[1].row.forEach((row) => {
+                if (row.MMEAL_SC_NM === '중식' || row.MMEAL_SC_CODE === '2') {
+                    mealData.push({
+                        date: formatNeisDate(row.MLSV_YMD),
+                        menu: row.DDISH_NM,
+                        calories: row.CAL_INFO,
+                        origin: row.ORTR_INFO,
+                        allergy: row.ALR_INFO
+                    });
+                }
+            });
+        }
+
+        setCachedMeals(monthKey, mealData);
+        return mealData;
+    } catch (err) {
+        console.error('나이스 급식 API 호출 에러:', err);
+        state.meals[monthKey] = [];
+        return [];
+    }
+}
