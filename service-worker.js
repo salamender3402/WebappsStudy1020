@@ -1,4 +1,4 @@
-const CACHE_NAME = 'teacherschedule-v3';
+const CACHE_NAME = 'teacherschedule-v4';
 const ASSETS = [
   'index.html',
   'style.css',
@@ -62,30 +62,26 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // 네트워크 우선(Network-First) 전략:
+  //   온라인이면 항상 서버의 최신 파일을 받아 화면에 쓰고 캐시도 갱신한다.
+  //   (재배포 직후 첫 새로고침에 예전 화면이 보이던 문제 해결)
+  //   오프라인일 때만 캐시에 저장된 파일로 폴백한다.
   event.respondWith(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.match(event.request).then((cachedResponse) => {
-        // 1. 캐시가 있든 없든 백그라운드에서 항상 최신 파일을 다운로드하여 캐시를 무선으로 갱신
-        const fetchedResponse = fetch(event.request)
-          .then((networkResponse) => {
-            // 정상적인 GET 응답에 대해서만 캐시 갱신
-            if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-              cache.put(event.request, networkResponse.clone());
-            }
-            return networkResponse;
-          })
-          .catch(() => {
-            // 오프라인 상태에서 네트워크 통신 실패 시 폴백
-            if (event.request.mode === 'navigate') {
-              return caches.match('index.html');
-            }
-          });
-
-        // 2. 이미 로컬 캐시에 저장된 옛날 버전이 있다면 0.01초 만에 즉시 반환 (체감 속도 극대화)
-        //    없다면 방금 백그라운드로 가져온 최신 네트워크 응답을 반환
-        return cachedResponse || fetchedResponse;
-      });
-    })
+    fetch(event.request)
+      .then((networkResponse) => {
+        if (networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
+          const copy = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, copy));
+        }
+        return networkResponse;
+      })
+      .catch(() =>
+        caches.match(event.request).then((cachedResponse) => {
+          if (cachedResponse) return cachedResponse;
+          if (event.request.mode === 'navigate') return caches.match('index.html');
+          return undefined;
+        })
+      )
   );
 });
 

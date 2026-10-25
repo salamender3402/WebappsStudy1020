@@ -12,7 +12,7 @@ import { eventBus, EVENTS } from './eventBus.js';
 // ------------------------------------------------------------------
 export const NEIS_API_KEY = '';
 export const NEIS_DEFAULT_SCHOOL = ''; // 행정표준기관코드 8자리
-export const NEIS_DEFAULT_OFFICE = 'B10'; // 시도교육청코드 (기본: 서울 B10)
+export const NEIS_DEFAULT_OFFICE = 'J10'; // 시도교육청코드 (기본: 경기도교육청 J10)
 
 // ------------------------------------------------------------------
 // 2. 보안 인증 코드 (연수 실습용 기본 비밀번호: 1234)
