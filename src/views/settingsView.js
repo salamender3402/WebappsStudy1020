@@ -1,4 +1,4 @@
-/* ==========================================================================
+﻿/* ==========================================================================
    views/settingsView.js
    - 설정 탭의 관리자 권한 인증 배지, 클라우드 DB 연동 상태 배지, 구글 시트 상태
      배지, PWA/ServiceWorker 상태 표시와 admin-only 요소 동적 토글을 담당하는
@@ -85,12 +85,18 @@ export function updateDbStatus() {
     const badgeDb = document.getElementById('badge-db-status');
     const btnDisconnect = document.getElementById('btn-disconnect-firebase');
     const btnSave = document.getElementById('btn-save-firebase');
+    const descEl = document.getElementById('db-status-desc');
 
     const connected = isFirebaseConnected();
 
     if (badgeDb) {
         badgeDb.innerText = connected ? '실시간 연동' : '로컬 모드';
         badgeDb.className = connected ? 'badge badge-success' : 'badge';
+    }
+    if (descEl) {
+        descEl.innerHTML = connected
+            ? '<strong>현재 상태: 실시간 클라우드 DB 연동 중</strong>'
+            : '<strong>현재 상태: 브라우저 로컬 저장 모드</strong>';
     }
     if (btnDisconnect) btnDisconnect.classList.toggle('hidden', !connected);
     if (btnSave) btnSave.innerText = connected ? '연동 정보 갱신' : '클라우드 DB 연동 저장';
@@ -119,6 +125,18 @@ function bindFirebaseConfigForm() {
  * 나이스 설정 폼(#neis-office-code, #neis-school-code)을 로컬 저장소 값과 양방향 연동한다.
  */
 function bindNeisConfigForm() {
+    const officeCode = getNeisOfficeCode() || '미지정';
+    const schoolCode = getNeisSchoolCode();
+    const displayEl = document.getElementById('neis-school-display');
+
+    if (displayEl) {
+        if (schoolCode) {
+            displayEl.innerHTML = `<strong>교육청:</strong> ${officeCode} | <strong>학교코드:</strong> <code>${schoolCode}</code>`;
+        } else {
+            displayEl.innerHTML = '미설정 (안티그래비티 대화창을 통해 학교 정보(NEIS_DEFAULT_SCHOOL)를 지정해 주세요)';
+        }
+    }
+
     const officeCodeSelect = document.getElementById('neis-office-code');
     const schoolCodeInput = document.getElementById('neis-school-code');
 

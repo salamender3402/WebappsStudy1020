@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
@@ -277,23 +277,16 @@
                         <span id="badge-db-status" class="badge">로컬 모드</span>
                     </div>
                     <div class="card-body">
-                        <p class="text-muted" style="font-size: 12px; margin-bottom: 12px;">파이어베이스(Firestore) 정보를 입력하면 자동으로 전 교사의 기기와 실시간 데이터가 연동됩니다.</p>
-                        
-                        <div class="form-group">
-                            <label for="fb-project-id">Firebase Project ID</label>
-                            <input type="text" id="fb-project-id" class="form-control" placeholder="예: teacherschedule-12345">
+                        <div id="db-status-info" class="info-box">
+                            <i class="fa-solid fa-cloud"></i>
+                            <div>
+                                <p id="db-status-desc"><strong>현재 상태: 브라우저 로컬 저장 모드</strong></p>
+                                <p class="text-muted" style="font-size: 12px; margin-top: 4px;">
+                                    안티그래비티 대화창을 통해 Firebase를 연결하거나, <code>src/core/state.js</code>의 <code>DEFAULT_FIREBASE_CONFIG</code>에 설정값을 입력하면 실시간 동기화가 활성화됩니다.
+                                </p>
+                            </div>
                         </div>
-                        <div class="form-group">
-                            <label for="fb-api-key">Firebase API Key</label>
-                            <input type="password" id="fb-api-key" class="form-control" placeholder="API Key 입력">
-                        </div>
-                        <div class="form-group">
-                            <label for="fb-app-id">Firebase App ID</label>
-                            <input type="text" id="fb-app-id" class="form-control" placeholder="예: 1:12345:web:abcd">
-                        </div>
-                        
-                        <button id="btn-save-firebase" class="btn btn-primary btn-block"><i class="fa-solid fa-cloud-arrow-up"></i> 클라우드 DB 연동 저장</button>
-                        <button id="btn-disconnect-firebase" class="btn btn-danger btn-block mt-2 hidden"><i class="fa-solid fa-cloud-slash"></i> 연동 해제 및 로컬 모드 전환</button>
+                        <button id="btn-disconnect-firebase" class="btn btn-danger btn-block mt-2 hidden"><i class="fa-solid fa-cloud-slash"></i> 연동 해제 및 로컬 모드로 전환</button>
                     </div>
                 </div>
 
@@ -302,35 +295,16 @@
                 <div class="card mt-4 admin-only">
                     <div class="card-header">
                         <h3><i class="fa-solid fa-cloud-arrow-down"></i> 나이스(NEIS) 학사일정 동기화</h3>
-                        <span class="badge badge-success">공식 API 연동</span>
+                        <span id="badge-neis-status" class="badge badge-success">공식 API</span>
                     </div>
                     <div class="card-body">
-                        <div class="form-row">
-                            <div class="form-group col-6">
-                                <label for="neis-office-code">시도교육청코드</label>
-                                <select id="neis-office-code" class="form-control">
-                                    <option value="J10" selected>경기도교육청</option>
-                                    <option value="B10">서울특별시교육청</option>
-                                    <option value="C10">부산광역시교육청</option>
-                                    <option value="D10">대구광역시교육청</option>
-                                    <option value="E10">인천광역시교육청</option>
-                                    <option value="F10">광주광역시교육청</option>
-                                    <option value="G10">대전광역시교육청</option>
-                                    <option value="H10">울산광역시교육청</option>
-                                    <option value="I10">세종특별자치시교육청</option>
-                                    <option value="K10">강원특별자치도교육청</option>
-                                    <option value="M10">충청북도교육청</option>
-                                    <option value="N10">충청남도교육청</option>
-                                    <option value="P10">전북특별자치도교육청</option>
-                                    <option value="Q10">전라남도교육청</option>
-                                    <option value="R10">경상북도교육청</option>
-                                    <option value="S10">경상남도교육청</option>
-                                    <option value="T10">제주특별자치도교육청</option>
-                                </select>
-                            </div>
-                            <div class="form-group col-6">
-                                <label for="neis-school-code">행정표준기관코드 (8자리)</label>
-                                <input type="text" id="neis-school-code" class="form-control" placeholder="학교 코드 8자리 입력" value="">
+                        <div class="info-box">
+                            <i class="fa-solid fa-school"></i>
+                            <div>
+                                <p><strong>연동 학교 정보</strong></p>
+                                <p id="neis-school-display" class="text-muted" style="font-size: 12px; margin-top: 4px;">
+                                    설정 확인 중...
+                                </p>
                             </div>
                         </div>
                         <div class="form-row">

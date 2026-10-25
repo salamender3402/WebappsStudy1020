@@ -1,0 +1,5 @@
+# Local backups
+backups/
+
+# Firebase local cache
+.firebase/
