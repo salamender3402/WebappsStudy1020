@@ -11,6 +11,7 @@
       "*.bat",
       "*.ps1",
       "*.md",
+      "*.log",
       "**/.*",
       "**/node_modules/**",
       "backups/**"

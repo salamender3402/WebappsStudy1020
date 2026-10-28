@@ -1,0 +1,4 @@
+# 윈도우 실행 파일은 받을 때 항상 CRLF 줄바꿈으로 유지
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

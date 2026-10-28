@@ -11,13 +11,14 @@ import { eventBus, EVENTS } from './eventBus.js';
 // 1. 나이스(NEIS) 공식 API 설정 (기본값: 비워둠 -> 연수 시 본인 학교 정보로 연동)
 // ------------------------------------------------------------------
 export const NEIS_API_KEY = '';
-export const NEIS_DEFAULT_SCHOOL = ''; // 행정표준기관코드 8자리
+export const NEIS_DEFAULT_SCHOOL = ''; // 나이스 표준학교코드 7자리 (SD_SCHUL_CODE, 예: 7621365)
 export const NEIS_DEFAULT_OFFICE = 'J10'; // 시도교육청코드 (기본: 경기도교육청 J10)
 
 // ------------------------------------------------------------------
-// 2. 보안 인증 코드 (연수 실습용 기본 비밀번호: 1234)
+// 2. 보안 인증 코드 (연수 실습용 기본값: 관리자 4321 / 교직원·연락망 1234)
+//    관리자 코드는 교직원 코드와 달라야 첫 화면에서 관리자 권한이 생긴다.
 // ------------------------------------------------------------------
-export const ADMIN_PASSCODE = '1234';   // 관리자 비밀번호
+export const ADMIN_PASSCODE = '4321';   // 관리자 비밀번호
 export const STAFF_PASSCODE = '1234';   // 교직원 보안 인증 코드
 export const CONTACT_PIN_CODE = '1234'; // 비상연락망 2차 PIN 번호
 

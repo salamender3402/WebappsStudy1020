@@ -13,7 +13,8 @@ try {
 }
 Write-Host '[서버 가동 완료] http://localhost:8000 (이 창을 닫으면 서버가 종료됩니다)' -ForegroundColor Green
 
-$rootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# bat에서 Invoke-Expression으로 실행하면 스크립트 경로가 비어 있으므로 현재 폴더를 기준으로 삼는다.
+if ($PSScriptRoot) { $rootDir = $PSScriptRoot } else { $rootDir = (Get-Location).Path }
 
 while ($listener.IsListening) {
     try {
