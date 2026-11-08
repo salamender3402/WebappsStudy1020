@@ -17,7 +17,7 @@ import {
 } from './services/authService.js';
 import { loadLocalStorageData } from './services/storageService.js';
 import { syncNeisSchedule, autoSyncNeisBackground } from './services/neisService.js';
-import { initFirebase } from './services/firebaseService.js';
+import { initFirebase, migrateLocalDataIfRemoteEmpty } from './services/firebaseService.js';
 import {
     downloadCsvTemplate,
     importScheduleFile,
@@ -185,7 +185,7 @@ async function handleSyncNeisClick() {
     try {
         const result = await syncNeisSchedule({ officeCode, schoolCode, year });
         if (result.success) {
-            alert(`나이스 학사일정 동기화 완료! (${result.source === 'mock' ? '모의 데이터' : '공식 API'})\n총 ${result.count}건의 학사일정이 최신 상태로 반영되었습니다.`);
+            alert(`나이스 학사일정 동기화 완료!\n총 ${result.count}건의 학사일정이 최신 상태로 반영되었습니다.`);
             renderCalendar();
             renderDayEvents();
         } else {
@@ -264,11 +264,7 @@ function handleVerifySecurityCode() {
     const errorMsg = document.getElementById('security-error-msg');
     if (!inputElement) return;
 
-    const rawValue = inputElement.value;
-    console.log('[Security Gate] 인증 시도 코드:', rawValue);
-
-    const result = verifySecurityCode(rawValue);
-    console.log('[Security Gate] 인증 결과:', result);
+    const result = verifySecurityCode(inputElement.value);
     inputElement.value = '';
 
     if (result.success) {
@@ -425,6 +421,17 @@ function initApp() {
 
     // D. 파이어베이스 연동 개시
     safeModuleInit('FirebaseInit', initFirebase);
+
+    // D-2. 앱 실행 후 관리자 인증을 하면(첫 화면·설정 화면 모두)
+    //      로컬에만 있던 데이터를 DB로 옮기고 나이스 자동 동기화를 1회 실행
+    let wasAdmin = state.isAdmin;
+    eventBus.on(EVENTS.AUTH_STATE_CHANGED, async ({ isAdmin }) => {
+        const becameAdmin = isAdmin && !wasAdmin;
+        wasAdmin = isAdmin;
+        if (!becameAdmin) return;
+        await migrateLocalDataIfRemoteEmpty();
+        await autoSyncNeisBackground();
+    });
 
     // E. 각 뷰 모듈 독립 초기화 (하나가 폭사해도 다음 뷰에 영향 0%)
     safeModuleInit('ModalView', initModalView);

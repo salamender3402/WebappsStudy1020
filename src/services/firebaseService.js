@@ -186,7 +186,8 @@ function migrateLocalContactsToFirestore(db) {
 
 /**
  * schedules 컬렉션을 실시간 구독한다.
- * Firestore가 비어 있고 관리자 권한 + 로컬 일정이 있으면 자동 마이그레이션하고,
+ * Firestore가 비어 있고 로컬 일정이 있으면, 관리자는 자동 마이그레이션하고
+ * 관리자가 아니면 로컬 일정을 지우지 않고 그대로 둔다 (관리자 인증 시 migrateLocalDataIfRemoteEmpty가 옮긴다).
  * 그 외에는 원격 데이터를 state.events에 반영하고 오프라인 대비 로컬에도 캐싱한다.
  * @param {object} db - Firestore 인스턴스
  */
@@ -201,8 +202,12 @@ function subscribeSchedules(db) {
             remoteEvents.push({ id: doc.id, ...data });
         });
 
-        if (remoteEvents.length === 0 && state.isAdmin && state.events.length > 0) {
-            migrateLocalEventsToFirestore(db);
+        if (remoteEvents.length === 0 && state.events.length > 0) {
+            if (state.isAdmin) {
+                migrateLocalEventsToFirestore(db);
+            } else {
+                console.log('[firebaseService] Firestore 일정이 비어 있어 로컬 일정을 유지합니다. 관리자 인증 시 DB로 옮겨집니다.');
+            }
             return;
         }
 
@@ -224,8 +229,8 @@ function subscribeContacts(db) {
         const remoteContacts = [];
         snapshot.forEach((doc) => remoteContacts.push({ id: doc.id, ...doc.data() }));
 
-        if (remoteContacts.length === 0 && state.isAdmin && state.contacts.length > 0) {
-            migrateLocalContactsToFirestore(db);
+        if (remoteContacts.length === 0 && state.contacts.length > 0) {
+            if (state.isAdmin) migrateLocalContactsToFirestore(db);
             return;
         }
 
@@ -360,6 +365,28 @@ export async function disconnectFirebase() {
  */
 export function isFirebaseConnected() {
     return state.dbMode === 'firebase' && !!state.db;
+}
+
+/**
+ * 관리자 인증 직후 호출한다. Firestore가 비어 있는데 로컬에만 일정·연락처가 남아 있으면
+ * (관리자가 아닌 상태로 DB를 연결한 경우) DB로 옮긴다.
+ * @returns {Promise<void>}
+ */
+export async function migrateLocalDataIfRemoteEmpty() {
+    if (!isFirebaseConnected() || !state.isAdmin) return;
+    const db = state.db;
+    try {
+        if (state.events.length > 0) {
+            const snap = await db.collection('schedules').limit(1).get();
+            if (snap.empty) migrateLocalEventsToFirestore(db);
+        }
+        if (state.contacts.length > 0) {
+            const snap = await db.collection('contacts').limit(1).get();
+            if (snap.empty) migrateLocalContactsToFirestore(db);
+        }
+    } catch (err) {
+        console.error('[firebaseService] 관리자 인증 후 마이그레이션 확인 실패:', err);
+    }
 }
 
 /**

@@ -28,7 +28,7 @@
                 const banner = document.createElement('div');
                 banner.id = 'file-protocol-warning';
                 banner.style.cssText = 'position:fixed;top:0;left:0;width:100%;background:#dc2626;color:#ffffff;padding:14px 20px;text-align:center;font-size:14px;font-weight:600;z-index:999999;box-shadow:0 4px 12px rgba(0,0,0,0.3);line-height:1.5;';
-                banner.innerHTML = '⚠️ <strong>주의:</strong> 탐색기에서 파일을 직접 열면(file://) 브라우저 보안 규정(CORS)으로 인해 인증 버튼이 동작하지 않습니다.<br>폴더 안의 <strong>[서버실행.bat]</strong> 파일을 더블클릭하거나, VS Code의 <strong>Live Server</strong>로 실행해 주세요!';
+                banner.innerHTML = '⚠️ <strong>주의:</strong> 탐색기에서 파일을 직접 열면(file://) 브라우저 보안 규정(CORS)으로 인해 인증 버튼이 동작하지 않습니다.<br>폴더 안의 <strong>[start-server.bat]</strong> 파일을 더블클릭하거나, VS Code의 <strong>Live Server</strong>로 실행해 주세요!';
                 document.body.prepend(banner);
             });
         }

@@ -65,7 +65,7 @@ export function setNeisApiKey(apiKey) {
 }
 
 /**
- * 현재 사용할 나이스 행정표준기관코드(학교코드)를 반환한다.
+ * 현재 사용할 나이스 표준학교코드(7자리, SD_SCHUL_CODE)를 반환한다.
  * 설정에서 변경한 값이 있으면 우선 사용하고, 없으면 기본 학교코드로 폴백한다.
  * @returns {string} 사용할 학교코드
  */
@@ -81,7 +81,7 @@ export function getNeisSchoolCode() {
 
 /**
  * 나이스 학교코드를 로컬에 저장한다.
- * @param {string} schoolCode - 학교 행정표준기관코드
+ * @param {string} schoolCode - 표준학교코드 7자리 (SD_SCHUL_CODE)
  */
 export function setNeisSchoolCode(schoolCode) {
     try {
@@ -217,15 +217,63 @@ async function replaceNeisEvents(newEvents, year) {
 // 3. 학사일정(SchoolSchedule) 동기화
 // ------------------------------------------------------------------
 
+// 나이스 Open API가 한 번에 돌려주는 최대 건수
+const NEIS_PAGE_SIZE = 1000;
+
+/**
+ * 한 학년도(3월 1일 ~ 이듬해 2월 말일)의 나이스 학사일정을 모든 페이지에 걸쳐 조회한다.
+ * 한 페이지 크기를 넘는 학교도 빠짐없이 받도록 list_total_count만큼 페이지를 이어서 요청한다.
+ * @param {{apiKey: string, officeCode: string, schoolCode: string, year: string|number}} params - 조회 조건
+ * @returns {Promise<Array<{id: string, title: string, date: string, category: string, desc: string}>>} 학사일정 배열 (검색 결과가 없으면 빈 배열)
+ * @throws {Error} 통신 실패, 인증키·학교코드 오류 등 나이스가 오류를 돌려준 경우
+ */
+async function fetchNeisScheduleEvents({ apiKey, officeCode, schoolCode, year }) {
+    const fromYmd = `${year}0301`;
+    const toYmd = `${Number(year) + 1}0228`;
+    const rows = [];
+
+    for (let pIndex = 1; ; pIndex++) {
+        const url = `${NEIS_SCHEDULE_ENDPOINT}?KEY=${apiKey}&Type=json&pIndex=${pIndex}&pSize=${NEIS_PAGE_SIZE}&ATPT_OFCDC_SC_CODE=${officeCode}&SD_SCHUL_CODE=${schoolCode}&AA_FROM_YMD=${fromYmd}&AA_TO_YMD=${toYmd}`;
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('API 서버 통신에 실패했습니다.');
+
+        const result = await response.json();
+        if (result.RESULT) {
+            if (result.RESULT.CODE === 'INFO-200') break; // 더 이상 데이터 없음
+            throw new Error(`${result.RESULT.MESSAGE} (${result.RESULT.CODE})`);
+        }
+        if (!(result.SchoolSchedule && result.SchoolSchedule[1] && result.SchoolSchedule[1].row)) {
+            throw new Error('예상치 못한 데이터 결과 형식입니다.');
+        }
+
+        const pageRows = result.SchoolSchedule[1].row;
+        rows.push(...pageRows);
+
+        const head = result.SchoolSchedule[0] && result.SchoolSchedule[0].head;
+        const total = head && head[0] ? Number(head[0].list_total_count) : rows.length;
+        if (rows.length >= total || pageRows.length < NEIS_PAGE_SIZE) break;
+    }
+
+    return rows.map((row, i) => ({
+        id: `ev-neis-${Date.now()}-${i}`,
+        title: row.EVENT_NM,
+        date: formatNeisDate(row.AA_YMD),
+        category: 'neis',
+        desc: row.EVENT_CNTNT ? row.EVENT_CNTNT.trim() : ''
+    }));
+}
+
 /**
  * 나이스 학사일정 Open API(SchoolSchedule)를 호출해 연간 공식 학사일정을 동기화한다.
- * 관리자 권한이 없거나 학교코드가 비어 있으면 실행되지 않으며,
- * API 호출이 실패하면 자동으로 simulateNeisSync()의 모의 데이터로 폴백한다.
+ * 관리자 권한이 없거나 학교코드가 비어 있으면 실행되지 않는다.
+ * API 호출이 실패하면 기존 일정을 건드리지 않고 실패 메시지를 돌려준다.
+ * (모의 데이터로 대체하면 키·학교코드가 틀려도 성공처럼 보이고, 공용 DB의 실제 일정이 가짜로 바뀔 수 있다)
  * @param {object} [options] - 동기화 옵션
  * @param {string} [options.officeCode] - 시도교육청 코드
- * @param {string} [options.schoolCode] - 행정표준기관코드 8자리
+ * @param {string} [options.schoolCode] - 표준학교코드 7자리 (SD_SCHUL_CODE)
  * @param {string|number} [options.year] - 학사일정 기준 연도 (기본값: 올해)
- * @returns {Promise<{success: boolean, count: number, source: 'api'|'mock'|'none', message?: string}>} 동기화 결과
+ * @returns {Promise<{success: boolean, count: number, source: 'api'|'none', message?: string}>} 동기화 결과
  */
 export async function syncNeisSchedule({
     officeCode = getNeisOfficeCode(),
@@ -236,42 +284,28 @@ export async function syncNeisSchedule({
         return { success: false, count: 0, source: 'none', message: '관리자 권한이 필요합니다.' };
     }
     if (!schoolCode) {
-        return { success: false, count: 0, source: 'none', message: '행정표준기관코드 8자리를 입력해 주세요.' };
+        return { success: false, count: 0, source: 'none', message: '표준학교코드 7자리를 입력해 주세요.' };
     }
 
     setNeisOfficeCode(officeCode);
     setNeisSchoolCode(schoolCode);
 
     try {
-        const fromYmd = `${year}0301`;
-        const toYmd = `${Number(year) + 1}0228`;
-        const url = `${NEIS_SCHEDULE_ENDPOINT}?KEY=${getNeisApiKey()}&Type=json&pIndex=1&pSize=100&ATPT_OFCDC_SC_CODE=${officeCode}&SD_SCHUL_CODE=${schoolCode}&AA_FROM_YMD=${fromYmd}&AA_TO_YMD=${toYmd}`;
-
-        const response = await fetch(url);
-        if (!response.ok) throw new Error('API 서버 통신에 실패했습니다.');
-
-        const result = await response.json();
-        if (result.RESULT && result.RESULT.CODE === 'INFO-200') {
-            throw new Error('검색된 학사일정 데이터가 없습니다.');
+        const newEvents = await fetchNeisScheduleEvents({ apiKey: getNeisApiKey(), officeCode, schoolCode, year });
+        if (newEvents.length === 0) {
+            return { success: false, count: 0, source: 'none', message: '검색된 학사일정이 없습니다. 교육청 코드와 학교코드(7자리)를 확인해 주세요.' };
         }
-        if (!(result.SchoolSchedule && result.SchoolSchedule[1] && result.SchoolSchedule[1].row)) {
-            throw new Error('예상치 못한 데이터 결과 형식입니다.');
-        }
-
-        const rows = result.SchoolSchedule[1].row;
-        const newEvents = rows.map((row, i) => ({
-            id: `ev-neis-${Date.now()}-${i}`,
-            title: row.EVENT_NM,
-            date: formatNeisDate(row.AA_YMD),
-            category: 'neis',
-            desc: row.EVENT_CN ? row.EVENT_CN.trim() : ''
-        }));
 
         const importCount = await replaceNeisEvents(newEvents, year);
         return { success: true, count: importCount, source: 'api' };
     } catch (error) {
-        console.warn('나이스 학사일정 API 연동 실패로 모의 데이터를 주입합니다:', error);
-        return simulateNeisSync(year);
+        console.warn('나이스 학사일정 API 연동 실패 (기존 일정은 그대로 유지됩니다):', error);
+        return {
+            success: false,
+            count: 0,
+            source: 'none',
+            message: `나이스 학사일정을 불러오지 못했습니다. 인증키와 학교코드(7자리)를 확인해 주세요.\n(${error.message})`
+        };
     }
 }
 
@@ -320,26 +354,10 @@ export async function autoSyncNeisBackground(year = String(new Date().getFullYea
 
     try {
         console.log('[Auto Sync] 나이스 학사일정 자동 동기화를 시작합니다...');
-        const fromYmd = `${year}0301`;
-        const toYmd = `${Number(year) + 1}0228`;
-        const url = `${NEIS_SCHEDULE_ENDPOINT}?KEY=${apiKey}&Type=json&pIndex=1&pSize=100&ATPT_OFCDC_SC_CODE=${officeCode}&SD_SCHUL_CODE=${schoolCode}&AA_FROM_YMD=${fromYmd}&AA_TO_YMD=${toYmd}`;
-
-        const response = await fetch(url);
-        if (!response.ok) throw new Error('API network error');
-
-        const result = await response.json();
-        if (!(result.SchoolSchedule && result.SchoolSchedule[1] && result.SchoolSchedule[1].row)) {
+        const newEvents = await fetchNeisScheduleEvents({ apiKey, officeCode, schoolCode, year });
+        if (newEvents.length === 0) {
             return { success: true, count: 0, source: 'api' };
         }
-
-        const rows = result.SchoolSchedule[1].row;
-        const newEvents = rows.map((row, i) => ({
-            id: `ev-neis-${Date.now()}-${i}`,
-            title: row.EVENT_NM,
-            date: formatNeisDate(row.AA_YMD),
-            category: 'neis',
-            desc: row.EVENT_CN ? row.EVENT_CN.trim() : ''
-        }));
 
         const importCount = await replaceNeisEvents(newEvents, year);
         console.log(`[Auto Sync] 나이스 학사일정 백그라운드 자동 갱신 완료 (${importCount}건 반영됨)`);
