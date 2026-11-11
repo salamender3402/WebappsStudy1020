@@ -7,6 +7,7 @@
 - PowerShell에서는 `npx` 대신 **`npx.cmd`** 를 씁니다. 실행 정책은 바꾸지 않습니다.
   - 예: `npx.cmd -y firebase-tools@latest login`
 - ZIP 압축은 한글 파일명이 깨지지 않도록 **`tar -xf`** 로 풉니다.
+- GitHub ZIP을 풀면 `WebappsStudy1020-main` 같은 하위 폴더가 생깁니다. **안의 파일(숨김 파일 포함)을 사용자가 연 폴더로 바로 꺼내고, 빈 하위 폴더는 지웁니다.** `firebase.json`과 이 파일이 사용자가 연 폴더 바로 아래에 있어야 합니다.
 - 로컬 서버는 `start-server.bat`으로 켭니다. 켠 뒤에는 **브라우저로 `http://localhost:8000`을 열어 사용자에게 보여 주세요.** 서버 창이 사용자에게 보이지 않을 수 있습니다.
 - 사용자가 보고 있는 서버는 **끄지 마세요.** 꺼야 하면 먼저 알립니다.
 
